@@ -197,3 +197,13 @@ Cleanup and improvements applied so far:
   of reference data.
 - Split the `TestTokenV2` implementation into separate util, holding, transfer, and allocation modules
   to improve maintainability and readability of the code.
+- Support different `settlementDeadline`s on different allocations settled in the same batch
+  - motivation: iterated allocations and top-up allocations are unlikely to have the same settlement deadline
+  - implementation: move `settlementDeadline` out of `SettlementInfo` to `AllocationSpecification`, and
+    inline `Reference` into `SettlementInfo` to make it more clear that the `SettlementInfo` is the
+    way to link allocations to a settlement.
+- Remove the `RequestedAllocation` type in favor of directly using `AllocationSpecification`
+  to specify the requested allocations in an allocation requestd.
+  - enables: creating a single allocation request for different `authorizer`s whose account parties
+    are the same
+  - required moving `AllocationSpecification.settlement` up to the `AllocationView` level
