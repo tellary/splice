@@ -73,6 +73,8 @@ import org.lfdecentralizedtrust.splice.http.v0.definitions.{
   ListBulkUpdateHistoryObjectsRequest,
   ListVoteResultsRequest,
   MaybeCachedContractWithState,
+  PreviousSvRewardWeightRequest,
+  PreviousSvRewardWeightResponse,
   UpdateHistoryItem,
   UpdateHistoryItemV2WithHash,
   UpdateHistoryRequestV2,
@@ -2140,6 +2142,26 @@ class HttpScanHandler(
           )
         )
       }
+    }
+  }
+
+  override def getPreviousSvRewardWeight(
+      respond: ScanResource.GetPreviousSvRewardWeightResponse.type
+  )(
+      body: PreviousSvRewardWeightRequest
+  )(extracted: TraceContext): Future[ScanResource.GetPreviousSvRewardWeightResponse] = {
+    implicit val tc: TraceContext = extracted
+    withSpan(s"$workflowId.getPreviousSvRewardWeight") { _ => _ =>
+      store
+        .lookupLatestSvRewardWeightChange(
+          PartyId.tryFromProtoPrimitive(body.svParty),
+          body.effectiveBefore,
+        )
+        .map(weight =>
+          ScanResource.GetPreviousSvRewardWeightResponse.OK(
+            PreviousSvRewardWeightResponse(rewardWeight = weight.map(_.toString))
+          )
+        )
     }
   }
 
