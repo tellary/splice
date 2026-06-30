@@ -764,7 +764,23 @@ class BftScanConnection(
   )(implicit
       ec: ExecutionContext,
       tc: TraceContext,
-  ): Future[T] = {
+  ): Future[T]
+  = bftCallWithScanResponses(
+      call, endpoint, callConfig, consensusFailureLogLevel,
+      consensusLogConfig, shortenResponsesForLog)
+    .map(_._1)
+
+  private def bftCallWithScanResponses[T](
+      call: SingleScanConnection => Future[T],
+      endpoint: String,
+      callConfig: BftCallConfig,
+      consensusFailureLogLevel: Level = Level.WARN,
+      consensusLogConfig: BftScanConnection.ConsensusLogConfig,
+      shortenResponsesForLog: T => Any = identity[T],
+  )(implicit
+      ec: ExecutionContext,
+      tc: TraceContext,
+  ): Future[(T, ConcurrentHashMap[BftScanConnection.ScanResponse[T], List[Uri]])] = {
     implicit val mc: MetricsContext = MetricsContext("request" -> endpoint)
 
     val connections = scanList.scanConnections
@@ -902,6 +918,19 @@ class BftScanConnection(
         )
   }
 
+  /** Given the grouped scan responses, find the [[BftScanConnection.SuccessfulResponse]]
+    * key with the highest number of agreeing scans (the consensus group) and return the
+    * list of scan URIs that produced it. Returns an empty list if there is no successful
+    * response.
+    */
+  private def consensusScanUrls(
+      scanResponses: ConcurrentHashMap[BftScanConnection.ScanResponse[String], List[Uri]]
+  ): List[Uri] =
+    scanResponses.asScala.toSeq
+      .collect { case (_: BftScanConnection.SuccessfulResponse[?], uris) => uris }
+      .maxByOption(_.size)
+      .getOrElse(List.empty)
+
   /** This is special because in addition to 'Ok' we can receive
     * 'Undetermined' - This might indicate that scan is yet to process root hash for this round
     * 'CannotProvide' - Indicates that scan does not have required app-activity data to provide a response
@@ -923,7 +952,7 @@ class BftScanConnection(
     val callConfig = BftCallConfig.default(scanList.scanConnections)
     if (!callConfig.enoughAvailableScans) Future.successful(undetermined)
     else
-      bftCall[String](
+      bftCallWithScanResponses[String](
         call = scan =>
           scan.getRewardAccountingRootHash(roundNumber).flatMap {
             case GetRewardAccountingRootHashResponse.members.RewardAccountingRootHashOk(ok) =>
@@ -940,19 +969,20 @@ class BftScanConnection(
           agreementLogLevel = Some(Level.INFO),
         ),
       )
-        .transform(tryRootHash =>
-          Success(
-            tryRootHash.toOption.fold(undetermined)(rootHash =>
+        .transformWith {
+          case Success ((rootHash, scanResponses)) =>
+            Future.successful(
               GetRewardAccountingRootHashResponse(
                 RewardAccountingRootHashOk(
                   status = "Ok",
                   roundNumber = roundNumber,
+                  consensusScanUrls = consensusScanUrls(scanResponses).map(_.toString).toVector,
                   rootHash = rootHash,
                 )
               )
             )
-          )
-        )
+          case Failure(_) => Future.successful(undetermined)
+        }
   }
 
   /** The batch contents are verifiable via the hash, so BFT agreement across scans is not
@@ -983,7 +1013,7 @@ trait HasUrl {
 }
 
 object BftScanConnection {
-  def executeCall[T, C <: HasUrl](
+  private[client] def executeCall[T, C <: HasUrl](
       call: C => Future[T],
       requestFrom: Seq[C],
       nTargetSuccess: Int,
@@ -995,7 +1025,7 @@ object BftScanConnection {
       ec: ExecutionContext,
       tc: TraceContext,
       mc: MetricsContext = MetricsContext.Empty,
-  ): Future[T] = {
+  ): Future[(T, ConcurrentHashMap[BftScanConnection.ScanResponse[T], List[Uri]])] = {
     require(requestFrom.nonEmpty, "At least one request must be made.")
 
     val responses =
@@ -1044,7 +1074,7 @@ object BftScanConnection {
           }
         }
     }
-    finalResponse.future
+    finalResponse.future.map(v => (v, responses))
   }
 
   /** Responses are stored in a ConcurrentHashMap. Equality is defined as:
@@ -1998,7 +2028,7 @@ object BftScanConnection {
       agreementLogLevel: Option[Level] = None,
   )
 
-  private sealed trait ScanResponse[+T]
+  private[client] sealed trait ScanResponse[+T]
   private case class SuccessfulResponse[+T](response: T) extends ScanResponse[T]
   private case class HttpFailureResponse[+T](status: StatusCode, body: Json) extends ScanResponse[T]
   private case class NonJsonHttpFailureResponse[+T](status: StatusCode) extends ScanResponse[T]
