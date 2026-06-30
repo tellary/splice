@@ -97,6 +97,7 @@ class BftScanConnectionTest
       when(m.config).thenReturn(
         ScanAppClientConfig(NetworkAppClientConfig(scanUrl(n)))
       )
+      when(m.url).thenReturn(Uri(scanUrl(n)))
       m
     }
     connections.foreach { connection =>
@@ -1043,7 +1044,7 @@ class BftScanConnectionTest
       connections.tail.foreach(c => when(c.getDsoPartyId()).thenReturn(delayedSuccess))
 
       for {
-        result <- BftScanConnection.executeCall(call, connections, nTargetSuccess = 1, logger)
+        (result, _) <- BftScanConnection.executeCall(call, connections, nTargetSuccess = 1, logger)
       } yield result should be(partyIdA)
     }
 
@@ -1111,7 +1112,7 @@ class BftScanConnectionTest
         }
 
       for {
-        result <- BftScanConnection.executeCall(
+        (result, _) <- BftScanConnection.executeCall(
           call,
           connections,
           nTargetSuccess = 2,
@@ -1158,7 +1159,7 @@ class BftScanConnectionTest
       makeMockFail(connections(2), notFoundFailure)
 
       for {
-        result <- BftScanConnection.executeCall(
+        (result, _) <- BftScanConnection.executeCall(
           call,
           connections,
           nTargetSuccess = 2,
@@ -1194,7 +1195,7 @@ class BftScanConnectionTest
       }
 
       for {
-        result <- BftScanConnection.executeCall(
+        (result, _) <- BftScanConnection.executeCall(
           call,
           connections,
           nTargetSuccess = 2,

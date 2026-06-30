@@ -905,7 +905,23 @@ class BftScanConnection(
   )(implicit
       ec: ExecutionContext,
       tc: TraceContext,
-  ): Future[T] = {
+  ): Future[T]
+  = bftCallWithScanUris(
+      call, endpoint, callConfig, consensusFailureLogLevel,
+      consensusLogConfig, shortenResponsesForLog)
+    .map(_._1)
+
+  private def bftCallWithScanUris[T](
+      call: SingleScanConnection => Future[T],
+      endpoint: String,
+      callConfig: BftCallConfig,
+      consensusFailureLogLevel: Level = Level.WARN,
+      consensusLogConfig: BftScanConnection.ConsensusLogConfig,
+      shortenResponsesForLog: T => Any = identity[T],
+  )(implicit
+      ec: ExecutionContext,
+      tc: TraceContext,
+  ): Future[(T, List[Uri])] = {
     implicit val mc: MetricsContext = MetricsContext("request" -> endpoint)
 
     val connections = scanList.scanConnections
@@ -1056,15 +1072,21 @@ class BftScanConnection(
   override def getRewardAccountingRootHash(roundNumber: Long)(implicit
       ec: ExecutionContext,
       tc: TraceContext,
-  ): Future[GetRewardAccountingRootHashResponse] = {
+  ): Future[GetRewardAccountingRootHashResponse]
+  = getRewardAccountingRootHashWithScanUris(roundNumber).map(_._1)
+
+  def getRewardAccountingRootHashWithScanUris(roundNumber: Long)(implicit
+      ec: ExecutionContext,
+      tc: TraceContext,
+  ): Future[(GetRewardAccountingRootHashResponse, List[Uri])] = {
     val undetermined =
       GetRewardAccountingRootHashResponse(
         RewardAccountingRootHashUndetermined(status = "Undetermined")
       )
     val callConfig = BftCallConfig.default(scanList.scanConnections)
-    if (!callConfig.enoughAvailableScans) Future.successful(undetermined)
+    if (!callConfig.enoughAvailableScans) Future.successful((undetermined, Nil))
     else
-      bftCall[String](
+      bftCallWithScanUris[String](
         call = scan =>
           scan.getRewardAccountingRootHash(roundNumber).flatMap {
             case GetRewardAccountingRootHashResponse.members.RewardAccountingRootHashOk(ok) =>
@@ -1081,19 +1103,21 @@ class BftScanConnection(
           agreementLogLevel = Some(Level.INFO),
         ),
       )
-        .transform(tryRootHash =>
-          Success(
-            tryRootHash.toOption.fold(undetermined)(rootHash =>
-              GetRewardAccountingRootHashResponse(
-                RewardAccountingRootHashOk(
-                  status = "Ok",
-                  roundNumber = roundNumber,
-                  rootHash = rootHash,
+        .transformWith {
+          case Success ((rootHash, consensusUris)) =>
+            Future.successful(
+              ( GetRewardAccountingRootHashResponse(
+                  RewardAccountingRootHashOk(
+                    status = "Ok",
+                    roundNumber = roundNumber,
+                    rootHash = rootHash,
+                  )
                 )
+              , consensusUris.map(_.toString)
               )
             )
-          )
-        )
+          case Failure(_) => Future.successful((undetermined, Nil))
+        }
   }
 
   /** The batch contents are verifiable via the hash, so BFT agreement across scans is not
@@ -1136,13 +1160,13 @@ object BftScanConnection {
       ec: ExecutionContext,
       tc: TraceContext,
       mc: MetricsContext = MetricsContext.Empty,
-  ): Future[T] = {
+  ): Future[(T, List[Uri])] = {
     require(requestFrom.nonEmpty, "At least one request must be made.")
 
     val responses =
       new ConcurrentHashMap[BftScanConnection.ScanResponse[T], List[Uri]]()
     val nResponsesDone = new AtomicInteger(0)
-    val finalResponse = Promise[T]()
+    val finalResponse = Promise[(T, List[Uri])]()
 
     requestFrom.foreach { scan =>
       call(scan)
@@ -1161,7 +1185,7 @@ object BftScanConnection {
             case _ => true
           }
           if (considerResponseForQuorum && agreements.size == nTargetSuccess) { // consensus has been reached
-            finalResponse.tryComplete(response): Unit
+            finalResponse.tryComplete(response.map(r => (r, agreements))): Unit
           }
 
           if (nResponsesDone.incrementAndGet() == requestFrom.size) { // all Scans are done
@@ -1176,7 +1200,7 @@ object BftScanConnection {
               case Some(consensusResponse) =>
                 logDisagreements(
                   logger,
-                  consensusResponse,
+                  consensusResponse.map(_._1),
                   responses,
                   consensusLogConfig,
                   connectionMetrics,
