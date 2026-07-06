@@ -159,11 +159,11 @@ abstract class CalculateRewardsTriggerBase(
       rewardMetrics.calculateRewardsRootHashBftReads.mark()
       for {
         bftScan <- getPeerBftScanConnection()
-        response <- bftScan.getRewardAccountingRootHash(round)
+        response <- bftScan.getRewardAccountingRootHashWithScanUris(round)
       } yield response match {
-        case RewardAccountingRootHashOk(ok) =>
+        case (RewardAccountingRootHashOk(ok), scanUrls) =>
           logger.info(
-            s"Obtained the root-hash for round $round via BFT read from consensus scans: ${ok.consensusScanUrls.mkString(", ")}."
+            s"Obtained the root-hash for round $round via BFT read from consensus scans: ${scanUrls.mkString(", ")}."
   )
           new Hash(ok.rootHash)
         case _ => rootHashUnavailable("could not obtain root-hash via BFT read.")

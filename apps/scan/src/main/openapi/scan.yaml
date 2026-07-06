@@ -4305,7 +4305,6 @@ components:
       required:
         - status
         - round_number
-        - consensus_scan_urls
         - root_hash
       properties:
         status:
@@ -4313,10 +4312,6 @@ components:
         round_number:
           type: integer
           format: int64
-        consensus_scan_urls:
-          type: array
-          items:
-            type: string
         root_hash:
           type: string
           description: Hex-encoded root hash

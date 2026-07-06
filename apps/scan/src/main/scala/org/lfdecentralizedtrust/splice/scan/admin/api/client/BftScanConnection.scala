@@ -1085,13 +1085,19 @@ class BftScanConnection(
   override def getRewardAccountingRootHash(roundNumber: Long)(implicit
       ec: ExecutionContext,
       tc: TraceContext,
-  ): Future[GetRewardAccountingRootHashResponse] = {
+  ): Future[GetRewardAccountingRootHashResponse]
+  = getRewardAccountingRootHashWithScanUris(roundNumber).map(_._1)
+
+  def getRewardAccountingRootHashWithScanUris(roundNumber: Long)(implicit
+      ec: ExecutionContext,
+      tc: TraceContext,
+  ): Future[(GetRewardAccountingRootHashResponse, List[Uri])] = {
     val undetermined =
       GetRewardAccountingRootHashResponse(
         RewardAccountingRootHashUndetermined(status = "Undetermined")
       )
     val callConfig = BftCallConfig.default(scanList.scanConnections)
-    if (!callConfig.enoughAvailableScans) Future.successful(undetermined)
+    if (!callConfig.enoughAvailableScans) Future.successful((undetermined, Nil))
     else
       bftCallWithScanResponses[String](
         call = scan =>
@@ -1113,16 +1119,17 @@ class BftScanConnection(
         .transformWith {
           case Success ((rootHash, scanResponses)) =>
             Future.successful(
-              GetRewardAccountingRootHashResponse(
-                RewardAccountingRootHashOk(
-                  status = "Ok",
-                  roundNumber = roundNumber,
-                  consensusScanUrls = consensusScanUrls(scanResponses).map(_.toString).toVector,
-                  rootHash = rootHash,
+              ( GetRewardAccountingRootHashResponse(
+                  RewardAccountingRootHashOk(
+                    status = "Ok",
+                    roundNumber = roundNumber,
+                    rootHash = rootHash,
+                  )
                 )
+              , consensusScanUrls(scanResponses).map(_.toString)
               )
             )
-          case Failure(_) => Future.successful(undetermined)
+          case Failure(_) => Future.successful((undetermined, Nil))
         }
   }
 
