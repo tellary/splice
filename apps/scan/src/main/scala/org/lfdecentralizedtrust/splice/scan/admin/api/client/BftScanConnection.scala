@@ -921,7 +921,7 @@ class BftScanConnection(
   )(implicit
       ec: ExecutionContext,
       tc: TraceContext,
-  ): Future[(T, ConcurrentHashMap[BftScanConnection.ScanResponse[T], List[Uri]])] = {
+  ): Future[(T, List[Uri])] = {
     implicit val mc: MetricsContext = MetricsContext("request" -> endpoint)
 
     val connections = scanList.scanConnections
@@ -1059,19 +1059,6 @@ class BftScanConnection(
         )
   }
 
-  /** Given the grouped scan responses, find the [[BftScanConnection.SuccessfulResponse]]
-    * key with the highest number of agreeing scans (the consensus group) and return the
-    * list of scan URIs that produced it. Returns an empty list if there is no successful
-    * response.
-    */
-  private def consensusScanUrls(
-      scanResponses: ConcurrentHashMap[BftScanConnection.ScanResponse[String], List[Uri]]
-  ): List[Uri] =
-    scanResponses.asScala.toSeq
-      .collect { case (_: BftScanConnection.SuccessfulResponse[?], uris) => uris }
-      .maxByOption(_.size)
-      .getOrElse(List.empty)
-
   /** This is special because in addition to 'Ok' we can receive
     * 'Undetermined' - This might indicate that scan is yet to process root hash for this round
     * 'CannotProvide' - Indicates that scan does not have required app-activity data to provide a response
@@ -1117,7 +1104,7 @@ class BftScanConnection(
         ),
       )
         .transformWith {
-          case Success ((rootHash, scanResponses)) =>
+          case Success ((rootHash, consensusUris)) =>
             Future.successful(
               ( GetRewardAccountingRootHashResponse(
                   RewardAccountingRootHashOk(
@@ -1126,7 +1113,7 @@ class BftScanConnection(
                     rootHash = rootHash,
                   )
                 )
-              , consensusScanUrls(scanResponses).map(_.toString)
+              , consensusUris.map(_.toString)
               )
             )
           case Failure(_) => Future.successful((undetermined, Nil))
@@ -1173,13 +1160,13 @@ object BftScanConnection {
       ec: ExecutionContext,
       tc: TraceContext,
       mc: MetricsContext = MetricsContext.Empty,
-  ): Future[(T, ConcurrentHashMap[BftScanConnection.ScanResponse[T], List[Uri]])] = {
+  ): Future[(T, List[Uri])] = {
     require(requestFrom.nonEmpty, "At least one request must be made.")
 
     val responses =
       new ConcurrentHashMap[BftScanConnection.ScanResponse[T], List[Uri]]()
     val nResponsesDone = new AtomicInteger(0)
-    val finalResponse = Promise[T]()
+    val finalResponse = Promise[(T, List[Uri])]()
 
     requestFrom.foreach { scan =>
       call(scan)
@@ -1198,7 +1185,7 @@ object BftScanConnection {
             case _ => true
           }
           if (considerResponseForQuorum && agreements.size == nTargetSuccess) { // consensus has been reached
-            finalResponse.tryComplete(response): Unit
+            finalResponse.tryComplete(response.map(r => (r, agreements))): Unit
           }
 
           if (nResponsesDone.incrementAndGet() == requestFrom.size) { // all Scans are done
@@ -1213,7 +1200,7 @@ object BftScanConnection {
               case Some(consensusResponse) =>
                 logDisagreements(
                   logger,
-                  consensusResponse,
+                  consensusResponse.map(_._1),
                   responses,
                   consensusLogConfig,
                   connectionMetrics,
@@ -1222,7 +1209,7 @@ object BftScanConnection {
           }
         }
     }
-    finalResponse.future.map(v => (v, responses))
+    finalResponse.future
   }
 
   /** Responses are stored in a ConcurrentHashMap. Equality is defined as:
