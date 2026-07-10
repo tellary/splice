@@ -15,9 +15,6 @@ cloudArmor:
         maxRequestsBeforeHttp429: 200
         withinIntervalSeconds: 60
 cluster:
-  hyperdiskSupport:
-    enabled: true
-    enabledForInfra: true
   nodePools:
     additionalApps:
       - maxNodes: 20
